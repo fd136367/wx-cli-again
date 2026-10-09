@@ -854,7 +854,7 @@ async fn search_via_fts(
                 clauses.join(" AND ")
             );
             // 多 content 表时多取一些，最终再 truncate
-            params.push(Box::new((limit2 * 4) as i64));
+            params.push(Box::new((limit2.saturating_mul(4)) as i64));
             let params_ref: Vec<&dyn rusqlite::types::ToSql> =
                 params.iter().map(|p| p.as_ref()).collect();
             let mut stmt = conn.prepare(&sql)?;
@@ -1118,7 +1118,7 @@ pub async fn q_search(
         let kw2 = kw.clone();
         let since2 = since;
         let until2 = until;
-        let limit2 = limit * 3;
+        let limit2 = limit.saturating_mul(3);
         let names_map2 = names.map.clone();
         let group_nicknames_by_chat2 = Arc::clone(&group_nicknames_by_chat);
         let db_path_for_log = db_path.clone();
@@ -5094,7 +5094,7 @@ pub async fn q_attachments(
         let since2 = since;
         let until2 = until;
         // per-DB 软上限避免巨群全量加载
-        let per_db_cap = (offset + limit).max(limit) * 2;
+        let per_db_cap = offset.saturating_add(limit).max(limit).saturating_mul(2);
         let db_idx2 = db_idx as i64;
 
         let Some((conn, _)) = db.open_query_conn(&rel).await? else {
@@ -5260,6 +5260,13 @@ pub async fn q_extract(
         .context("解析 attachment_id 失败（不是合法 base64url(json)？）")?;
 
     let output_path = std::path::PathBuf::from(output);
+    // 拒绝 `..`：daemon 不该按客户端给的相对跳转写盘（daemon 可能以 root 运行）。
+    if output_path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        anyhow::bail!("output 不允许包含 `..`：{}", output_path.display());
+    }
     if output_path.exists() && !overwrite {
         anyhow::bail!(
             "目标已存在：{}（加 --overwrite 覆盖）",
@@ -5340,9 +5347,18 @@ pub async fn q_extract(
 
         let decoded = decoder::dispatch(&dat_bytes, v2_key)?;
 
-        // 写盘
-        std::fs::write(&output_path2, &decoded.data)
-            .with_context(|| format!("写出文件失败：{}", output_path2.display()))?;
+        // 写盘：O_NOFOLLOW，不跟随符号链接。
+        //
+        // daemon 可能以 root 运行（`sudo wx ...` 会拉起 root daemon），而它的工作目录
+        // / 输出路径常落在普通用户可写的地方。若目标已存在且是符号链接，旧实现
+        // `std::fs::write` 会顺着链接覆写 root 才能写的文件。
+        {
+            use std::io::Write;
+            let mut f = crate::fsutil::create_nofollow(&output_path2)
+                .with_context(|| format!("写出文件失败：{}", output_path2.display()))?;
+            f.write_all(&decoded.data)
+                .with_context(|| format!("写出文件失败：{}", output_path2.display()))?;
+        }
 
         // 注意：不要在这里塞 `ok: true`。dispatch 会用 Response::ok(v) 包一层，
         // Response 的 `data: Value` 字段是 #[serde(flatten)] 写出的，本 payload

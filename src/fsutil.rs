@@ -9,7 +9,7 @@
 use std::io::Write;
 use std::path::Path;
 
-/// 打开（创建/截断）文件用于写入：**不跟随符号链接**，新建时权限 0600。
+/// 打开（创建/截断）文件用于写入：**不跟随符号链接**，权限沿用 umask。
 #[cfg(unix)]
 pub fn create_nofollow(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -17,7 +17,6 @@ pub fn create_nofollow(path: &Path) -> std::io::Result<std::fs::File> {
         .write(true)
         .create(true)
         .truncate(true)
-        .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)
 }
@@ -29,6 +28,24 @@ pub fn create_nofollow(path: &Path) -> std::io::Result<std::fs::File> {
         .create(true)
         .truncate(true)
         .open(path)
+}
+
+/// 同 [`create_nofollow`]，但新建时权限为 0600（用于密钥等敏感文件）。
+#[cfg(unix)]
+pub fn create_nofollow_private(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+pub fn create_nofollow_private(path: &Path) -> std::io::Result<std::fs::File> {
+    create_nofollow(path)
 }
 
 /// 以追加方式打开文件（日志用）：**不跟随符号链接**，新建时权限 0600。
@@ -88,7 +105,7 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
             std::fs::create_dir_all(parent)?;
         }
     }
-    let mut file = create_nofollow(path)?;
+    let mut file = create_nofollow_private(path)?;
     file.write_all(contents)?;
     file.flush()?;
     drop(file);

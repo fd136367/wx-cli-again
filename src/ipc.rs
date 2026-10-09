@@ -8,7 +8,7 @@ use std::collections::HashMap;
 pub enum Request {
     Ping,
     Sessions {
-        #[serde(default = "default_limit_20")]
+        #[serde(default = "default_limit_20", deserialize_with = "de_clamp_limit")]
         limit: usize,
         #[serde(default, skip_serializing_if = "is_false")]
         with_meta: bool,
@@ -17,9 +17,9 @@ pub enum Request {
     },
     History {
         chat: String,
-        #[serde(default = "default_limit_50")]
+        #[serde(default = "default_limit_50", deserialize_with = "de_clamp_limit")]
         limit: usize,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "de_clamp_offset")]
         offset: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         since: Option<i64>,
@@ -42,7 +42,7 @@ pub enum Request {
         keyword: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         chats: Option<Vec<String>>,
-        #[serde(default = "default_limit_20")]
+        #[serde(default = "default_limit_20", deserialize_with = "de_clamp_limit")]
         limit: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         since: Option<i64>,
@@ -58,11 +58,11 @@ pub enum Request {
     Contacts {
         #[serde(skip_serializing_if = "Option::is_none")]
         query: Option<String>,
-        #[serde(default = "default_limit_50")]
+        #[serde(default = "default_limit_50", deserialize_with = "de_clamp_limit")]
         limit: usize,
     },
     Unread {
-        #[serde(default = "default_limit_20")]
+        #[serde(default = "default_limit_20", deserialize_with = "de_clamp_limit")]
         limit: usize,
         /// 按会话类型过滤：private / group / official / folded / all，支持多选
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -80,7 +80,7 @@ pub enum Request {
         /// None 表示首次运行，会返回 new_state 供下次使用
         #[serde(skip_serializing_if = "Option::is_none")]
         state: Option<HashMap<String, i64>>,
-        #[serde(default = "default_limit_200")]
+        #[serde(default = "default_limit_200", deserialize_with = "de_clamp_limit")]
         limit: usize,
         #[serde(default, skip_serializing_if = "is_false")]
         with_meta: bool,
@@ -99,7 +99,7 @@ pub enum Request {
         debug_source: bool,
     },
     Favorites {
-        #[serde(default = "default_limit_50")]
+        #[serde(default = "default_limit_50", deserialize_with = "de_clamp_limit")]
         limit: usize,
         /// 类型过滤：1=文本,2=图片,5=文章,19=名片,20=视频
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -110,7 +110,7 @@ pub enum Request {
     },
     /// 朋友圈互动通知（点赞 + 评论）
     SnsNotifications {
-        #[serde(default = "default_limit_50")]
+        #[serde(default = "default_limit_50", deserialize_with = "de_clamp_limit")]
         limit: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         since: Option<i64>,
@@ -122,7 +122,7 @@ pub enum Request {
     },
     /// 朋友圈时间线（按时间 / 作者筛选帖子）
     SnsFeed {
-        #[serde(default = "default_limit_20")]
+        #[serde(default = "default_limit_20", deserialize_with = "de_clamp_limit")]
         limit: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         since: Option<i64>,
@@ -134,7 +134,7 @@ pub enum Request {
     },
     /// 查询公众号文章推送（biz_message_*.db 分片）
     BizArticles {
-        #[serde(default = "default_limit_50")]
+        #[serde(default = "default_limit_50", deserialize_with = "de_clamp_limit")]
         limit: usize,
         /// 公众号名称过滤（模糊匹配 display name，None = 全部）
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,7 +150,7 @@ pub enum Request {
     /// 朋友圈全文搜索（匹配 contentDesc）
     SnsSearch {
         keyword: String,
-        #[serde(default = "default_limit_20")]
+        #[serde(default = "default_limit_20", deserialize_with = "de_clamp_limit")]
         limit: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         since: Option<i64>,
@@ -168,9 +168,9 @@ pub enum Request {
         /// 类型过滤：当前仅支持 image
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kinds: Option<Vec<String>>,
-        #[serde(default = "default_limit_50")]
+        #[serde(default = "default_limit_50", deserialize_with = "de_clamp_limit")]
         limit: usize,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "de_clamp_offset")]
         offset: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         since: Option<i64>,
@@ -193,9 +193,9 @@ pub enum Request {
     },
     /// 跨会话时间线（按时间合并多 chat 消息）
     Timeline {
-        #[serde(default = "default_limit_50")]
+        #[serde(default = "default_limit_50", deserialize_with = "de_clamp_limit")]
         limit: usize,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "de_clamp_offset")]
         offset: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         since: Option<i64>,
@@ -243,6 +243,30 @@ impl Response {
         let s = serde_json::to_string(self)?;
         Ok(s + "\n")
     }
+}
+
+/// 客户端可控的 `limit` 上限。
+///
+/// 原实现直接把 `usize` 交给 SQLite（`limit as i64`）：传 `>= 2^63` 会得到**负数**
+/// LIMIT，而 SQLite 把负 LIMIT 当作「无上限」，等于把整张消息表读进内存（DoS）。
+/// 在反序列化处统一钳制，所有命令（含以后新增的）都自动覆盖。
+pub const MAX_LIMIT: usize = 100_000;
+
+/// 客户端可控的 `offset` 上限（深 offset 本身就是 O(offset) 扫描）。
+pub const MAX_OFFSET: usize = 100_000;
+
+fn de_clamp_limit<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(usize::deserialize(deserializer)?.min(MAX_LIMIT))
+}
+
+fn de_clamp_offset<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(usize::deserialize(deserializer)?.min(MAX_OFFSET))
 }
 
 fn default_limit_20() -> usize {
