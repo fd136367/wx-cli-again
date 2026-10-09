@@ -650,16 +650,31 @@ fn wal_path_for(db_path: &Path) -> PathBuf {
     db_path.with_file_name(name)
 }
 
+/// 解析 64 个 hex 字符为 32 字节。
+///
+/// 按 **字节** 处理，不做 `&s[i*2..i*2+2]` 这样的 `str` 切片：长度检查用的是
+/// `s.len()`（字节数），而切片要求落在字符边界上，含多字节字符的输入会直接 panic。
 fn hex_to_32bytes(s: &str) -> Result<[u8; 32]> {
-    if s.len() != 64 {
-        anyhow::bail!("密钥 hex 长度应为 64，实际为 {}", s.len());
+    let bytes = s.as_bytes();
+    if bytes.len() != 64 {
+        anyhow::bail!("密钥 hex 长度应为 64，实际为 {}", bytes.len());
     }
     let mut out = [0u8; 32];
-    for i in 0..32 {
-        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
-            .with_context(|| format!("非法 hex 字符 at {}", i * 2))?;
+    for (i, pair) in bytes.chunks_exact(2).enumerate() {
+        let hi = hex_nibble(pair[0]).with_context(|| format!("非法 hex 字符 at {}", i * 2))?;
+        let lo = hex_nibble(pair[1]).with_context(|| format!("非法 hex 字符 at {}", i * 2 + 1))?;
+        out[i] = (hi << 4) | lo;
     }
     Ok(out)
+}
+
+fn hex_nibble(b: u8) -> Result<u8> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => anyhow::bail!("非法 hex 字节 0x{:02x}", b),
+    }
 }
 
 #[cfg(test)]

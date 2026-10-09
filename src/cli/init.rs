@@ -105,10 +105,23 @@ pub fn cmd_init(force: bool, hook_seconds: Option<u64>) -> Result<()> {
     #[cfg(unix)]
     drop_privileges_if_sudo()?;
 
+    // 非 root 路径下 `drop_privileges_if_sudo()` 会直接返回，umask 仍可能是默认的 022，
+    // 于是 ~/.wx-cli 与密钥文件会是 0755 / 0644。这里无条件收紧一次。
+    #[cfg(unix)]
+    unsafe {
+        libc::umask(0o077);
+    }
+
     // 确保父目录存在（如 ~/.wx-cli/），必须在任何写入之前
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("创建目录失败: {}", parent.display()))?;
+        // 目录收紧到 0700：必须在**非 root** 路径下也执行。旧实现只在
+        // `drop_privileges_if_sudo()` 内部收紧权限，普通用户跑 `wx init` 时
+        // ~/.wx-cli 是 0755、all_keys.json 是 0644，同机其他用户可直接读走 raw key。
+        if parent == config::cli_dir() {
+            crate::fsutil::tighten_dir_perms(parent);
+        }
     }
 
     // Step 3: 保存 all_keys.json（合并后的完整集合）
@@ -121,7 +134,7 @@ pub fn cmd_init(force: bool, hook_seconds: Option<u64>) -> Result<()> {
             }),
         );
     }
-    std::fs::write(&keys_file_path, serde_json::to_string_pretty(&keys_json)?)
+    crate::fsutil::write_private_file(&keys_file_path, serde_json::to_string_pretty(&keys_json)?.as_bytes())
         .context("写入 all_keys.json 失败")?;
     println!(
         "成功保存 {} 个数据库密钥（本次新匹配 {}）",
@@ -183,7 +196,7 @@ pub fn cmd_init(force: bool, hook_seconds: Option<u64>) -> Result<()> {
     cfg.entry("decrypted_dir".into())
         .or_insert_with(|| json!("decrypted"));
 
-    std::fs::write(&config_path, serde_json::to_string_pretty(&cfg)?)
+    crate::fsutil::write_private_file(&config_path, serde_json::to_string_pretty(&cfg)?.as_bytes())
         .context("写入 config.json 失败")?;
     println!("配置已保存: {}", config_path.display());
     println!("初始化完成，可以使用 wx sessions / wx history 等命令了");

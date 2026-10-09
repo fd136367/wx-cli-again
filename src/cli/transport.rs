@@ -128,10 +128,9 @@ fn start_daemon() -> Result<()> {
         if let Some(parent) = log_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let (stdout_stdio, stderr_stdio) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
+        // O_NOFOLLOW：~/.wx-cli 属于调用用户，若以 sudo 运行，普通用户可预先把
+        // daemon.log 做成指向任意文件的符号链接，让 root 去追加内容。
+        let (stdout_stdio, stderr_stdio) = crate::fsutil::open_append_nofollow(&log_path)
             .and_then(|f| f.try_clone().map(|g| (f, g)))
             .map(|(f, g)| (std::process::Stdio::from(f), std::process::Stdio::from(g)))
             .unwrap_or_else(|_| (std::process::Stdio::null(), std::process::Stdio::null()));
@@ -158,10 +157,7 @@ fn start_daemon() -> Result<()> {
         if let Some(parent) = log_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let (stdout_stdio, stderr_stdio) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
+        let (stdout_stdio, stderr_stdio) = crate::fsutil::open_append_nofollow(&log_path)
             .and_then(|f| f.try_clone().map(|g| (f, g)))
             .map(|(f, g)| (std::process::Stdio::from(f), std::process::Stdio::from(g)))
             .unwrap_or_else(|_| (std::process::Stdio::null(), std::process::Stdio::null()));
@@ -203,7 +199,8 @@ fn write_pid_file(pid: u32, exe: &Path) -> Result<()> {
         exe: Some(exe.to_path_buf()),
     };
     let content = serde_json::to_string(&pid_file)?;
-    std::fs::write(config::pid_path(), content)
+    // O_NOFOLLOW：同 daemon.log，防止普通用户用符号链接让 root 截断任意文件。
+    crate::fsutil::write_private_file(&config::pid_path(), content.as_bytes())
         .with_context(|| format!("写入 {} 失败", config::pid_path().display()))?;
     Ok(())
 }

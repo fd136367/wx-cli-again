@@ -30,7 +30,10 @@ pub fn cmd_key_list(json: bool, show_secrets: bool) -> Result<()> {
             if enc.is_empty() {
                 continue;
             }
-            let preview = format!("{}…", &enc[..enc.len().min(12)]);
+            // 用 chars() 而不是字节切片：`&enc[..12]` 在非 ASCII 值上会 panic
+            // （byte index N is not a char boundary）。同时把预览缩短到 8 个 hex
+            // （32 bit），避免默认输出泄露过多密钥材料。
+            let preview = format!("{}…", enc.chars().take(8).collect::<String>());
             known.push(KeyEntry {
                 db_name: k.replace('\\', "/"),
                 enc_key: enc.clone(),
@@ -164,10 +167,14 @@ pub fn cmd_key_set(db_name: &str, enc_key: &str) -> Result<()> {
         }
     }
     map.insert(rel.clone(), json!({ "enc_key": key }));
+    // 无条件 0600：`wx key set` 不需要 sudo，旧实现用 std::fs::write 会按 umask
+    // 落成 0644，同机其他用户可读走 raw SQLCipher key。
+    crate::fsutil::write_private_file(&cfg.keys_file, serde_json::to_string_pretty(&map)?.as_bytes())?;
     if let Some(parent) = cfg.keys_file.parent() {
-        std::fs::create_dir_all(parent)?;
+        if parent == config::cli_dir() {
+            crate::fsutil::tighten_dir_perms(parent);
+        }
     }
-    std::fs::write(&cfg.keys_file, serde_json::to_string_pretty(&map)?)?;
     println!("已写入密钥: {} → {}", rel, cfg.keys_file.display());
     // try hot-reload（会 invalidate 解密缓存）
     match super::transport::send(crate::ipc::Request::ReloadConfig) {

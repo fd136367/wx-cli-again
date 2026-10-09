@@ -1,4 +1,5 @@
 mod config;
+mod fsutil;
 mod ipc;
 mod crypto;
 mod scanner;
