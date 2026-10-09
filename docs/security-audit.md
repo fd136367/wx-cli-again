@@ -19,7 +19,7 @@
 
 | 级别 | 数量 | 代表问题 |
 |------|------|----------|
-| 严重 (High) | 4 | macOS 内存扫描完全失效；WAL 页 1 解密路径错误；密钥文件权限；daemon 任意路径写盘 |
+| 严重 (High) | 4（1 已修复） | macOS 内存扫描完全失效；**WAL 页 1 解密路径错误（已修复）**；密钥文件权限；daemon 任意路径写盘 |
 | 中 (Medium) | 11 | IPC 无对端认证；root 往用户可写目录写文件（符号链接提权）；负数 LIMIT；WAL 无校验 |
 | 低 / 信息 | 15 | panic、溢出、安装脚本无校验和、CI 未 pin SHA 等 |
 
@@ -87,7 +87,7 @@ let info_count_expected: mach_msg_type_number_t =
 
 ---
 
-### H2. WAL 中 page 1 的帧用错了解密路径，会把解密产物第 1 页写坏
+### H2. WAL 中 page 1 的帧用错了解密路径，会把解密产物第 1 页写坏  ✅ **已修复**
 
 **文件**：`src/crypto/wal.rs:64-66`
 
@@ -126,6 +126,12 @@ let info_count_expected: mach_msg_type_number_t =
 **影响**：解密产物 `file is not a database` / 元数据错乱，静默数据损坏。
 
 **修复**：`decrypt_page(enc_key, &page_buf, pgno)?`（去掉 `if pgno == 1 { 2 }`）。
+
+**修复状态**：已修复（`src/crypto/wal.rs:73`），并新增回归测试
+`wal_page1_frame_uses_page1_decrypt_path` / `wal_non_first_page_frame_uses_its_own_pgno`。
+验证：`cargo check --all-targets` 通过；`cargo test --bin wx` 142 passed；
+把代码临时改回旧写法后该测试会失败（`assertion left == right failed: pgno=1 的 WAL 帧必须按 pgno=1 解密`），
+证明测试确实覆盖该 bug。
 
 **置信度**：高（SQLCipher 官方源码逐行核对）。
 
